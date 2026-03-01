@@ -285,138 +285,193 @@ def safe_str(val, default="-"):
 # Excel出力
 # ─────────────────────────────────────────
 def generate_excel(data: dict) -> bytes:
-    """抽出データをExcel形式で出力（openpyxl）"""
+    """
+    抽出データを整形されたExcel形式で出力（A4横向き印刷対応）
+
+    列構成（全17列 A～Q）:
+    A=No, B=開始年月, C=終了年月, D=業種,
+    E=システム概要・担当業務（統合）, F=OS/言語/DB/ツール, G=役割,
+    H-Q=フェーズ10列
+    """
     from openpyxl import Workbook
-    from openpyxl.styles import (
-        Font, PatternFill, Alignment, Border, Side, colors as xl_colors
-    )
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.page import PageMargins
     from io import BytesIO as _BytesIO
 
     wb = Workbook()
     ws = wb.active
     ws.title = "職務経歴書"
 
-    # スタイル定義
-    HEADER_FILL = PatternFill("solid", fgColor="1A3A6B")
-    HEADER_FONT = Font(color="FFFFFF", bold=True, size=9)
-    NORMAL_FONT = Font(size=9)
-    CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    LEFT   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
-    THIN   = Side(style="thin")
-    BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-    STRIPE = PatternFill("solid", fgColor="F0F4FF")
+    # ─── スタイル定義 ─────────────────────────
+    HDR_FILL   = PatternFill("solid", fgColor="1A3A6B")
+    HDR_FONT   = Font(name="Meiryo UI", color="FFFFFF", bold=True, size=9)
+    VAL_FONT   = Font(name="Meiryo UI", size=9)
+    TTL_FONT   = Font(name="Meiryo UI", bold=True, size=14, color="1A3A6B")
+    SEC_FONT   = Font(name="Meiryo UI", bold=True, size=11, color="1A3A6B")
+    STRIPE     = PatternFill("solid", fgColor="EEF2FF")
+    THIN       = Side(style="thin")
+    BORDER     = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+    C_CENTER   = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    C_LEFT     = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    C_LEFT_TOP = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
 
-    def hdr_cell(ws, row, col, value, width=None):
-        c = ws.cell(row=row, column=col, value=value)
-        c.fill = HEADER_FILL
-        c.font = HEADER_FONT
-        c.alignment = CENTER
-        c.border = BORDER
-        if width:
-            ws.column_dimensions[c.column_letter].width = width
-        return c
+    def _hdr(r, c, v):
+        cell = ws.cell(row=r, column=c, value=v)
+        cell.fill, cell.font, cell.alignment, cell.border = HDR_FILL, HDR_FONT, C_CENTER, BORDER
+        return cell
 
-    def val_cell(ws, row, col, value, align=LEFT):
-        c = ws.cell(row=row, column=col, value=safe_str(value))
-        c.font = NORMAL_FONT
-        c.alignment = align
-        c.border = BORDER
-        return c
+    def _val(r, c, v, align=None):
+        cell = ws.cell(row=r, column=c, value=safe_str(v))
+        cell.font, cell.alignment, cell.border = VAL_FONT, (align or C_LEFT), BORDER
+        return cell
+
+    def _mval(r, c1, c2, v, align=None):
+        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+        return _val(r, c1, v, align or C_LEFT)
+
+    def _row_height(r, text, min_h=18, cpl=40):
+        n = max(1, len(str(text or "")) // cpl + str(text or "").count("\n") + 1)
+        ws.row_dimensions[r].height = max(min_h, n * 13)
+
+    # ─── 列幅設定 ─────────────────────────────
+    col_w = {
+        "A": 5,  "B": 10, "C": 10, "D": 13,
+        "E": 48, "F": 18, "G": 8,
+        "H": 4.5,"I": 4.5,"J": 4.5,"K": 4.5,"L": 4.5,
+        "M": 4.5,"N": 4.5,"O": 4.5,"P": 4.5,"Q": 4.5,
+    }
+    for col_letter, w in col_w.items():
+        ws.column_dimensions[col_letter].width = w
+
+    # ─── ページ設定（A4横向き） ───────────────
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize   = 9
+    ws.page_setup.fitToPage   = True
+    ws.page_setup.fitToWidth  = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_margins = PageMargins(left=0.5, right=0.5, top=0.75, bottom=0.75)
 
     bi = data.get("基本情報", {}) or {}
-    si = data.get("SAP情報", {}) or {}
+    si = data.get("SAP情報",  {}) or {}
+    LAST_COL = 17  # Q列
 
-    # ── セクション1: 基本情報 ──
+    # ══ 行1: タイトル ════════════════════════════
     r = 1
-    ws.merge_cells(f"A{r}:H{r}")
-    c = ws.cell(row=r, column=1, value="職　務　経　歴　書")
-    c.font = Font(bold=True, size=14, color="1A3A6B")
-    c.alignment = CENTER
+    ws.merge_cells(f"A{r}:Q{r}")
+    t = ws.cell(row=r, column=1, value="職　務　経　歴　書")
+    t.font, t.alignment = TTL_FONT, C_CENTER
+    ws.row_dimensions[r].height = 28
     r += 1
 
-    basic_rows = [
-        [("フリガナ", bi.get("フリガナ")),    ("性別", bi.get("性別")),
-         ("生年月日", bi.get("生年月日")),     ("未・既婚", bi.get("未既婚"))],
-        [("氏名", bi.get("氏名")),             ("国籍", bi.get("国籍")),
-         ("日本滞在年数", bi.get("日本滞在年数")), ("SAP経験", si.get("SAP経験年数"))],
-        [("モジュール", si.get("モジュール")), ("ポジション", si.get("ポジション")),
-         ("住所", bi.get("住所")),             None],
-        [("最寄駅", f"{safe_str(bi.get('最寄駅路線',''))} {safe_str(bi.get('最寄駅名',''))}駅"),
-         None, None, None],
-    ]
-    for row_data in basic_rows:
-        col = 1
-        for item in row_data:
-            if item is None:
-                col += 2
-                continue
-            hdr_cell(ws, r, col, item[0])
-            val_cell(ws, r, col+1, item[1])
-            col += 2
+    # ══ 基本情報テーブル（行2-5） ════════════════
+    # 行2: フリガナ(A) | 値(B-D) | 性別(E) | 値(F) | 生年月日(G) | 値(H-K) | 未・既婚(L) | 値(M-Q)
+    _hdr(r, 1, "フリガナ");   _mval(r, 2, 4,  bi.get("フリガナ"))
+    _hdr(r, 5, "性別");       _val(r,  6,      bi.get("性別"), C_CENTER)
+    _hdr(r, 7, "生年月日");   _mval(r, 8, 11,  bi.get("生年月日"))
+    _hdr(r, 12, "未・既婚");  _mval(r, 13, 17, bi.get("未既婚"), C_CENTER)
+    ws.row_dimensions[r].height = 18; r += 1
+
+    # 行3: 氏名(A) | 値(B-D) | 国籍(E) | 値(F) | 日本滞在(G) | 値(H-K) | SAP経験(L) | 値(M-Q)
+    _hdr(r, 1, "氏　名");     _mval(r, 2, 4,  bi.get("氏名"))
+    _hdr(r, 5, "国籍");       _val(r,  6,      bi.get("国籍"), C_CENTER)
+    _hdr(r, 7, "日本滞在");   _mval(r, 8, 11,  bi.get("日本滞在年数"))
+    _hdr(r, 12, "SAP経験");   _mval(r, 13, 17, si.get("SAP経験年数"), C_CENTER)
+    ws.row_dimensions[r].height = 18; r += 1
+
+    # 行4: モジュール(A) | 値(B-D) | ポジション(E) | 値(F-I) | 住所(J) | 値(K-Q)
+    _hdr(r, 1, "モジュール"); _mval(r, 2, 4,  si.get("モジュール"))
+    _hdr(r, 5, "ポジション"); _mval(r, 6, 9,  si.get("ポジション"))
+    _hdr(r, 10, "住　所");    _mval(r, 11, 17, bi.get("住所"))
+    ws.row_dimensions[r].height = 18; r += 1
+
+    # 行5: 最寄駅(A) | 値(B-Q)
+    _hdr(r, 1, "最寄駅")
+    station = f"{safe_str(bi.get('最寄駅路線',''), '')} {safe_str(bi.get('最寄駅名',''), '')}駅".strip()
+    _mval(r, 2, 17, station if station != "駅" else "-")
+    ws.row_dimensions[r].height = 18; r += 1
+
+    # ══ 資格・得意分野・自己PR ════════════════════
+    for label, key, min_h, cpl in [
+        ("取得資格", "取得資格", 18, 70),
+        ("得意分野", "得意分野", 18, 70),
+        ("自己ＰＲ", "自己PR",   36, 55),
+    ]:
+        _hdr(r, 1, label)
+        _mval(r, 2, 17, data.get(key), C_LEFT_TOP)
+        _row_height(r, data.get(key), min_h=min_h, cpl=cpl)
         r += 1
 
-    # ── セクション2: 資格・得意分野・自己PR ──
-    for label, key in [("取得資格", "取得資格"), ("得意分野", "得意分野"), ("自己PR", "自己PR")]:
-        hdr_cell(ws, r, 1, label)
-        ws.merge_cells(f"B{r}:H{r}")
-        c = val_cell(ws, r, 2, data.get(key))
-        ws.row_dimensions[r].height = 40
-        r += 1
+    # 空行
+    ws.row_dimensions[r].height = 6; r += 1
 
-    r += 1  # 空行
+    # ══ 業務経歴タイトル ══════════════════════════
+    ws.merge_cells(f"A{r}:Q{r}")
+    sec = ws.cell(row=r, column=1, value="業　務　経　歴")
+    sec.font, sec.alignment = SEC_FONT, C_CENTER
+    ws.row_dimensions[r].height = 22; r += 1
 
-    # ── セクション3: 職務経歴 ──
-    ws.merge_cells(f"A{r}:P{r}")
-    c = ws.cell(row=r, column=1, value="業　務　経　歴")
-    c.font = Font(bold=True, size=12, color="1A3A6B")
-    c.alignment = CENTER
-    r += 1
-
-    proj_headers = [
-        "No", "開始年月", "終了年月", "業種",
-        "システム概要", "担当業務", "OS/DB", "作業環境", "開発言語", "役割",
-        "分析/調査", "提案/管理", "要件/定義", "基本/設計",
-        "詳細/設計", "製造", "単体/試験", "結合/試験", "総合/試験", "運用/保守"
+    # ══ 業務経歴ヘッダー ══════════════════════════
+    proj_header_row = r
+    h_vals = [
+        "No","開始年月","終了年月","業種",
+        "システム概要・担当業務",
+        "OS/言語/DB/ツール","役割",
+        "分析\n調査","提案\n管理","要件\n定義","基本\n設計",
+        "詳細\n設計","製造","単体\n試験","結合\n試験","総合\n試験","運用\n保守"
     ]
+    for ci, hv in enumerate(h_vals, 1):
+        _hdr(r, ci, hv)
+    ws.row_dimensions[r].height = 30; r += 1
+
+    # ══ 業務経歴データ行 ══════════════════════════
     phase_keys = [
         "分析調査","提案管理レビュー","要件定義","基本設計",
         "詳細設計","製造","単体試験","結合試験","総合試験","運用保守"
     ]
-    col_widths = [5, 10, 10, 12, 25, 20, 15, 12, 12, 10] + [6]*10
-
-    for i, (h, w) in enumerate(zip(proj_headers, col_widths), 1):
-        hdr_cell(ws, r, i, h, width=w)
-    r += 1
 
     for pi, proj in enumerate(data.get("職務経歴", []) or []):
         phases = proj.get("フェーズ", {}) or {}
-        fill = STRIPE if pi % 2 == 0 else PatternFill()
+        bg     = STRIPE if pi % 2 == 0 else None
+
+        overview = safe_str(proj.get("プロジェクト概要"))
+        tasks    = safe_str(proj.get("担当業務"))
+        combined = f"{overview}\n【担当】{tasks}" if tasks not in ("-", overview) else overview
+
+        os_db = safe_str(proj.get("OS_DB"))
+        env   = safe_str(proj.get("作業環境"))
+        lang  = safe_str(proj.get("開発言語"))
+        env_text = "\n".join(x for x in [os_db, env, lang] if x != "-")
+
         row_vals = [
             safe_str(proj.get("No", pi+1)),
             safe_str(proj.get("開始年月")),
             safe_str(proj.get("終了年月")),
             safe_str(proj.get("業種")),
-            safe_str(proj.get("プロジェクト概要")),
-            safe_str(proj.get("担当業務")),
-            safe_str(proj.get("OS_DB")),
-            safe_str(proj.get("作業環境")),
-            safe_str(proj.get("開発言語")),
+            combined,
+            env_text,
             safe_str(proj.get("役割")),
-        ] + ["●" if phases.get(k) else "-" for k in phase_keys]
+        ] + ["●" if phases.get(k) else "" for k in phase_keys]
 
-        for col_idx, val in enumerate(row_vals, 1):
-            c = ws.cell(row=r, column=col_idx, value=val)
-            c.font = NORMAL_FONT
-            c.alignment = LEFT if col_idx <= 10 else CENTER
-            c.border = BORDER
-            if fill.fill_type:
-                c.fill = fill
-        ws.row_dimensions[r].height = 30
+        for ci, v in enumerate(row_vals, 1):
+            align = C_CENTER if ci >= 8 else                     (C_LEFT_TOP if ci in (5, 6) else                     (C_CENTER if ci <= 3 else C_LEFT))
+            cell = ws.cell(row=r, column=ci, value=v)
+            cell.font, cell.alignment, cell.border = VAL_FONT, align, BORDER
+            if bg:
+                cell.fill = bg
+
+        max_len = max(len(combined), len(env_text))
+        _row_height(r, max_len, min_h=22, cpl=35)
         r += 1
+
+    # フリーズペイン（ヘッダー固定）
+    ws.freeze_panes = ws.cell(row=proj_header_row + 1, column=1)
+    ws.print_area   = f"A1:Q{r-1}"
 
     buf = _BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
 
 # ─────────────────────────────────────────
 # PDF生成
