@@ -141,7 +141,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 def extract_skills_with_gemini(file_text: str, api_key: str) -> dict:
     """Gemini APIでスキルシート情報をJSON抽出"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash-lite")
 
     prompt = f"""
 以下はスキルシート（職務経歴書）のテキストデータです。
