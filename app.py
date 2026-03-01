@@ -2,7 +2,7 @@
 スキルシート変換ツール
 - Excel/PDFのスキルシートをアップロード
 - Gemini APIで情報抽出
-- 自社レイアウト（SAP職務経歴書）形式で表示・PDF出力
+- 自社レイアウト（SAP職務経歴書）形式で表示・Excel出力
 """
 
 import streamlit as st
@@ -15,17 +15,7 @@ import os
 import re
 from io import BytesIO
 from datetime import datetime
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph,
-    Spacer, HRFlowable
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
+# PDF出力は不使用
 
 # ─────────────────────────────────────────
 # 設定
@@ -36,59 +26,6 @@ try:
 except Exception:
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-# 日本語フォント設定（優先順位付きで検索）
-FONT_NAME = "JPFont"
-FONT_PATH = None
-
-# 候補フォントパスリスト（Linux/Mac/Windows対応）
-_font_candidates = [
-    # Streamlit Cloud (Ubuntu) - IPAフォント
-    "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
-    "/usr/share/fonts/truetype/ipafont-gothic/ipagp.ttf",
-    "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
-    "/usr/share/fonts/truetype/ipafont-gothic/ipag.ttf",
-    "/usr/share/fonts/opentype/ipafont/ipagp.ttf",
-    "/usr/share/fonts/truetype/ipafont/ipagp.ttf",
-    # Streamlit Cloud - Noto CJK
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-    # macOS
-    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-    "/Library/Fonts/Arial Unicode MS.ttf",
-    # Windows
-    "C:/Windows/Fonts/msgothic.ttc",
-    "C:/Windows/Fonts/YuGothM.ttc",
-    "C:/Windows/Fonts/meiryo.ttc",
-]
-
-for _p in _font_candidates:
-    if os.path.exists(_p):
-        try:
-            pdfmetrics.registerFont(TTFont(FONT_NAME, _p))
-            FONT_PATH = _p
-            break
-        except Exception:
-            continue
-
-# fc-list でも検索（上記で見つからない場合）
-if not FONT_PATH:
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["fc-list", ":lang=ja", "--format=%{file}\n"],
-            capture_output=True, text=True, timeout=5
-        )
-        for _p in result.stdout.splitlines():
-            if _p.endswith((".ttf", ".TTF", ".otf")):
-                try:
-                    pdfmetrics.registerFont(TTFont(FONT_NAME, _p))
-                    FONT_PATH = _p
-                    break
-                except Exception:
-                    continue
-    except Exception:
-        pass
 
 # ─────────────────────────────────────────
 # ページ設定
@@ -286,12 +223,18 @@ def safe_str(val, default="-"):
 # ─────────────────────────────────────────
 def generate_excel(data: dict) -> bytes:
     """
-    抽出データを整形されたExcel形式で出力（A4横向き印刷対応）
+    抽出データを整形されたExcel形式で出力
 
-    列構成（全17列 A～Q）:
-    A=No, B=開始年月, C=終了年月, D=業種,
-    E=システム概要・担当業務（統合）, F=OS/言語/DB/ツール, G=役割,
+    【列構成 全17列 A-Q】
+    A=No  B=開始年月  C=終了年月  D=業種
+    E=システム概要・担当業務  F=OS/言語/DB/ツール  G=役割
     H-Q=フェーズ10列
+
+    【基本情報 行割り当て（17列で隙間なし）】
+    Row2: A(フリガナ HDR) B-D(値) E(性別 HDR) F-G(値) H(生年月日 HDR) I-L(値) M(未・既婚 HDR) N-Q(値)
+    Row3: A(氏名 HDR)    B-D(値) E(国籍 HDR)  F-G(値) H(日本滞在 HDR) I-L(値) M(SAP経験 HDR)  N-Q(値)
+    Row4: A(モジュール HDR) B-D(値) E(ポジション HDR) F-H(値) I(住所 HDR) J-Q(値)
+    Row5: A(最寄駅 HDR) B-Q(値)
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -303,7 +246,7 @@ def generate_excel(data: dict) -> bytes:
     ws = wb.active
     ws.title = "職務経歴書"
 
-    # ─── スタイル定義 ─────────────────────────
+    # ── スタイル定義 ────────────────────────────────
     HDR_FILL   = PatternFill("solid", fgColor="1A3A6B")
     HDR_FONT   = Font(name="Meiryo UI", color="FFFFFF", bold=True, size=9)
     VAL_FONT   = Font(name="Meiryo UI", size=9)
@@ -316,37 +259,48 @@ def generate_excel(data: dict) -> bytes:
     C_LEFT     = Alignment(horizontal="left",   vertical="center", wrap_text=True)
     C_LEFT_TOP = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
 
+    # ── ヘルパー関数 ────────────────────────────────
     def _hdr(r, c, v):
+        """ヘッダーセル（紺背景・白文字）"""
         cell = ws.cell(row=r, column=c, value=v)
         cell.fill, cell.font, cell.alignment, cell.border = HDR_FILL, HDR_FONT, C_CENTER, BORDER
         return cell
 
     def _val(r, c, v, align=None):
+        """値セル"""
         cell = ws.cell(row=r, column=c, value=safe_str(v))
         cell.font, cell.alignment, cell.border = VAL_FONT, (align or C_LEFT), BORDER
         return cell
 
     def _mval(r, c1, c2, v, align=None):
+        """c1からc2をマージして値を入れる（隙間なし保証）"""
         ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
-        return _val(r, c1, v, align or C_LEFT)
+        cell = ws.cell(row=r, column=c1, value=safe_str(v))
+        cell.font, cell.alignment, cell.border = VAL_FONT, (align or C_LEFT), BORDER
+        return cell
 
-    def _row_height(r, text, min_h=18, cpl=40):
-        n = max(1, len(str(text or "")) // cpl + str(text or "").count("\n") + 1)
-        ws.row_dimensions[r].height = max(min_h, n * 13)
+    def _row_h(r, *texts, min_h=18, cpl=40):
+        """複数テキストの最大行数から行高さを設定"""
+        max_lines = 1
+        for t in texts:
+            s = str(t or "")
+            lines = s.count("\n") + max(1, len(s) // cpl)
+            max_lines = max(max_lines, lines)
+        ws.row_dimensions[r].height = max(min_h, max_lines * 13)
 
-    # ─── 列幅設定 ─────────────────────────────
+    # ── 列幅設定（全17列 A-Q）────────────────────────
     col_w = {
-        "A": 5,  "B": 10, "C": 10, "D": 13,
-        "E": 48, "F": 18, "G": 8,
-        "H": 4.5,"I": 4.5,"J": 4.5,"K": 4.5,"L": 4.5,
-        "M": 4.5,"N": 4.5,"O": 4.5,"P": 4.5,"Q": 4.5,
+        "A": 5,   "B": 10,  "C": 10,  "D": 13,
+        "E": 48,  "F": 20,  "G": 8,
+        "H": 5,   "I": 5,   "J": 5,   "K": 5,   "L": 5,
+        "M": 5,   "N": 5,   "O": 5,   "P": 5,   "Q": 5,
     }
     for col_letter, w in col_w.items():
         ws.column_dimensions[col_letter].width = w
 
-    # ─── ページ設定（A4横向き） ───────────────
+    # ── ページ設定（A4横向き印刷） ─────────────────────
     ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize   = 9
+    ws.page_setup.paperSize   = 9       # A4
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0
@@ -354,77 +308,80 @@ def generate_excel(data: dict) -> bytes:
 
     bi = data.get("基本情報", {}) or {}
     si = data.get("SAP情報",  {}) or {}
-    LAST_COL = 17  # Q列
 
-    # ══ 行1: タイトル ════════════════════════════
+    # ══ Row1: タイトル ════════════════════════════════
     r = 1
-    ws.merge_cells(f"A{r}:Q{r}")
-    t = ws.cell(row=r, column=1, value="職　務　経　歴　書")
+    ws.merge_cells("A1:Q1")
+    t = ws.cell(row=1, column=1, value="職　務　経　歴　書")
     t.font, t.alignment = TTL_FONT, C_CENTER
-    ws.row_dimensions[r].height = 28
-    r += 1
+    ws.row_dimensions[1].height = 28
+    r = 2
 
-    # ══ 基本情報テーブル（行2-5） ════════════════
-    # 行2: フリガナ(A) | 値(B-D) | 性別(E) | 値(F) | 生年月日(G) | 値(H-K) | 未・既婚(L) | 値(M-Q)
-    _hdr(r, 1, "フリガナ");   _mval(r, 2, 4,  bi.get("フリガナ"))
-    _hdr(r, 5, "性別");       _val(r,  6,      bi.get("性別"), C_CENTER)
-    _hdr(r, 7, "生年月日");   _mval(r, 8, 11,  bi.get("生年月日"))
-    _hdr(r, 12, "未・既婚");  _mval(r, 13, 17, bi.get("未既婚"), C_CENTER)
-    ws.row_dimensions[r].height = 18; r += 1
+    # ══ Row2: フリガナ / 性別 / 生年月日 / 未・既婚 ══════
+    # A(1)  B-D(2-4)  E(5)  F-G(6-7)  H(8)  I-L(9-12)  M(13)  N-Q(14-17)
+    _hdr(r, 1,  "フリガナ");   _mval(r, 2,  4,  bi.get("フリガナ"))
+    _hdr(r, 5,  "性別");       _mval(r, 6,  7,  bi.get("性別"), C_CENTER)
+    _hdr(r, 8,  "生年月日");   _mval(r, 9,  12, bi.get("生年月日"))
+    _hdr(r, 13, "未・既婚");   _mval(r, 14, 17, bi.get("未既婚"), C_CENTER)
+    ws.row_dimensions[r].height = 18;  r += 1
 
-    # 行3: 氏名(A) | 値(B-D) | 国籍(E) | 値(F) | 日本滞在(G) | 値(H-K) | SAP経験(L) | 値(M-Q)
-    _hdr(r, 1, "氏　名");     _mval(r, 2, 4,  bi.get("氏名"))
-    _hdr(r, 5, "国籍");       _val(r,  6,      bi.get("国籍"), C_CENTER)
-    _hdr(r, 7, "日本滞在");   _mval(r, 8, 11,  bi.get("日本滞在年数"))
-    _hdr(r, 12, "SAP経験");   _mval(r, 13, 17, si.get("SAP経験年数"), C_CENTER)
-    ws.row_dimensions[r].height = 18; r += 1
+    # ══ Row3: 氏名 / 国籍 / 日本滞在 / SAP経験 ══════════
+    # A(1)  B-D(2-4)  E(5)  F-G(6-7)  H(8)  I-L(9-12)  M(13)  N-Q(14-17)
+    _hdr(r, 1,  "氏　名");     _mval(r, 2,  4,  bi.get("氏名"))
+    _hdr(r, 5,  "国籍");       _mval(r, 6,  7,  bi.get("国籍"), C_CENTER)
+    _hdr(r, 8,  "日本滞在");   _mval(r, 9,  12, bi.get("日本滞在年数"))
+    _hdr(r, 13, "SAP経験");    _mval(r, 14, 17, si.get("SAP経験年数"), C_CENTER)
+    ws.row_dimensions[r].height = 18;  r += 1
 
-    # 行4: モジュール(A) | 値(B-D) | ポジション(E) | 値(F-I) | 住所(J) | 値(K-Q)
-    _hdr(r, 1, "モジュール"); _mval(r, 2, 4,  si.get("モジュール"))
-    _hdr(r, 5, "ポジション"); _mval(r, 6, 9,  si.get("ポジション"))
-    _hdr(r, 10, "住　所");    _mval(r, 11, 17, bi.get("住所"))
-    ws.row_dimensions[r].height = 18; r += 1
+    # ══ Row4: モジュール / ポジション / 住所 ═════════════
+    # A(1)  B-D(2-4)  E(5)  F-H(6-8)  I(9)  J-Q(10-17)
+    _hdr(r, 1, "モジュール");  _mval(r, 2, 4, si.get("モジュール"))
+    _hdr(r, 5, "ポジション");  _mval(r, 6, 8, si.get("ポジション"))
+    _hdr(r, 9, "住　所");      _mval(r, 10, 17, bi.get("住所"))
+    ws.row_dimensions[r].height = 18;  r += 1
 
-    # 行5: 最寄駅(A) | 値(B-Q)
+    # ══ Row5: 最寄駅 ══════════════════════════════════
+    # A(1)  B-Q(2-17)
     _hdr(r, 1, "最寄駅")
     station = f"{safe_str(bi.get('最寄駅路線',''), '')} {safe_str(bi.get('最寄駅名',''), '')}駅".strip()
-    _mval(r, 2, 17, station if station != "駅" else "-")
-    ws.row_dimensions[r].height = 18; r += 1
+    _mval(r, 2, 17, station if station not in ("駅", " 駅") else "-")
+    ws.row_dimensions[r].height = 18;  r += 1
 
-    # ══ 資格・得意分野・自己PR ════════════════════
+    # ══ Row6-8: 資格・得意分野・自己PR ═══════════════════
+    # A(1)  B-Q(2-17)
     for label, key, min_h, cpl in [
-        ("取得資格", "取得資格", 18, 70),
-        ("得意分野", "得意分野", 18, 70),
-        ("自己ＰＲ", "自己PR",   36, 55),
+        ("取得資格", "取得資格", 18, 80),
+        ("得意分野", "得意分野", 18, 80),
+        ("自己ＰＲ", "自己PR",   36, 50),
     ]:
         _hdr(r, 1, label)
         _mval(r, 2, 17, data.get(key), C_LEFT_TOP)
-        _row_height(r, data.get(key), min_h=min_h, cpl=cpl)
+        _row_h(r, data.get(key), min_h=min_h, cpl=cpl)
         r += 1
 
-    # 空行
-    ws.row_dimensions[r].height = 6; r += 1
+    # 区切り空行
+    ws.row_dimensions[r].height = 5;  r += 1
 
-    # ══ 業務経歴タイトル ══════════════════════════
+    # ══ 業務経歴タイトル ══════════════════════════════
     ws.merge_cells(f"A{r}:Q{r}")
     sec = ws.cell(row=r, column=1, value="業　務　経　歴")
     sec.font, sec.alignment = SEC_FONT, C_CENTER
-    ws.row_dimensions[r].height = 22; r += 1
+    ws.row_dimensions[r].height = 22;  r += 1
 
-    # ══ 業務経歴ヘッダー ══════════════════════════
+    # ══ 業務経歴ヘッダー行 ═══════════════════════════
     proj_header_row = r
     h_vals = [
-        "No","開始年月","終了年月","業種",
+        "No", "開始\n年月", "終了\n年月", "業種",
         "システム概要・担当業務",
-        "OS/言語/DB/ツール","役割",
+        "OS/言語/DB/ツール", "役割",
         "分析\n調査","提案\n管理","要件\n定義","基本\n設計",
         "詳細\n設計","製造","単体\n試験","結合\n試験","総合\n試験","運用\n保守"
     ]
     for ci, hv in enumerate(h_vals, 1):
         _hdr(r, ci, hv)
-    ws.row_dimensions[r].height = 30; r += 1
+    ws.row_dimensions[r].height = 30;  r += 1
 
-    # ══ 業務経歴データ行 ══════════════════════════
+    # ══ 業務経歴データ行 ══════════════════════════════
     phase_keys = [
         "分析調査","提案管理レビュー","要件定義","基本設計",
         "詳細設計","製造","単体試験","結合試験","総合試験","運用保守"
@@ -434,213 +391,53 @@ def generate_excel(data: dict) -> bytes:
         phases = proj.get("フェーズ", {}) or {}
         bg     = STRIPE if pi % 2 == 0 else None
 
+        # システム概要 + 担当業務を統合
         overview = safe_str(proj.get("プロジェクト概要"))
         tasks    = safe_str(proj.get("担当業務"))
-        combined = f"{overview}\n【担当】{tasks}" if tasks not in ("-", overview) else overview
+        combined = (f"【概要】{overview}\n【担当】{tasks}"
+                    if tasks not in ("-", overview, "") else overview)
 
+        # OS/DB + 環境 + 言語を統合
         os_db = safe_str(proj.get("OS_DB"))
         env   = safe_str(proj.get("作業環境"))
         lang  = safe_str(proj.get("開発言語"))
-        env_text = "\n".join(x for x in [os_db, env, lang] if x != "-")
+        env_text = "\n".join(x for x in [os_db, env, lang] if x and x != "-")
 
+        # 各列に値を設定
         row_vals = [
-            safe_str(proj.get("No", pi+1)),
+            safe_str(proj.get("No", pi + 1)),
             safe_str(proj.get("開始年月")),
             safe_str(proj.get("終了年月")),
             safe_str(proj.get("業種")),
             combined,
-            env_text,
+            env_text or "-",
             safe_str(proj.get("役割")),
         ] + ["●" if phases.get(k) else "" for k in phase_keys]
 
         for ci, v in enumerate(row_vals, 1):
-            align = C_CENTER if ci >= 8 else                     (C_LEFT_TOP if ci in (5, 6) else                     (C_CENTER if ci <= 3 else C_LEFT))
+            if ci <= 3:
+                align = C_CENTER
+            elif ci in (5, 6):
+                align = C_LEFT_TOP
+            else:
+                align = C_CENTER if ci >= 8 else C_LEFT
             cell = ws.cell(row=r, column=ci, value=v)
             cell.font, cell.alignment, cell.border = VAL_FONT, align, BORDER
             if bg:
                 cell.fill = bg
 
-        max_len = max(len(combined), len(env_text))
-        _row_height(r, max_len, min_h=22, cpl=35)
+        # 行高さ：テキスト量に応じて動的設定
+        _row_h(r, combined, env_text, min_h=25, cpl=38)
         r += 1
 
-    # フリーズペイン（ヘッダー固定）
+    # フリーズペイン・印刷範囲
     ws.freeze_panes = ws.cell(row=proj_header_row + 1, column=1)
-    ws.print_area   = f"A1:Q{r-1}"
+    ws.print_area   = f"A1:Q{r - 1}"
 
     buf = _BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
-
-# ─────────────────────────────────────────
-# PDF生成
-# ─────────────────────────────────────────
-
-def generate_pdf(data: dict) -> bytes:
-    """抽出データから自社レイアウトPDFを生成"""
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=10*mm,
-        leftMargin=10*mm,
-        topMargin=10*mm,
-        bottomMargin=10*mm
-    )
-
-    fn = FONT_NAME if FONT_PATH else "Helvetica"
-    styles = getSampleStyleSheet()
-    normal = ParagraphStyle("normal", fontName=fn, fontSize=8, leading=11)
-    small  = ParagraphStyle("small",  fontName=fn, fontSize=7, leading=9)
-    title_style = ParagraphStyle("title", fontName=fn, fontSize=16,
-                                  alignment=TA_CENTER, textColor=colors.HexColor("#1a3a6b"))
-    header_style = ParagraphStyle("header", fontName=fn, fontSize=8,
-                                   textColor=colors.white)
-
-    def hdr(text):
-        return Paragraph(f"<b>{text}</b>", header_style)
-
-    def cell(text, style=normal):
-        return Paragraph(safe_str(text), style)
-
-    story = []
-    bi = data.get("基本情報", {})
-    si = data.get("SAP情報", {})
-
-    # タイトル
-    story.append(Paragraph("職　務　経　歴　書", title_style))
-    story.append(Spacer(1, 3*mm))
-
-    # 更新日
-    today = datetime.now().strftime("%Y/%m/%d")
-    story.append(Paragraph(f"最終更新日：{today}", ParagraphStyle("right", fontName=fn, fontSize=8)))
-    story.append(Spacer(1, 2*mm))
-
-    # 基本情報テーブル
-    header_color = colors.HexColor("#1a3a6b")
-    basic_data = [
-        [hdr("フリガナ"), cell(bi.get("フリガナ","")), hdr("性別"), cell(bi.get("性別","")),
-         hdr("生年月日"), cell(bi.get("生年月日","")), hdr("未・既婚"), cell(bi.get("未既婚",""))],
-        [hdr("氏　名"), cell(bi.get("氏名","")), hdr("国籍"), cell(bi.get("国籍","")),
-         hdr("日本滞在"), cell(bi.get("日本滞在年数","")), hdr("SAP経験"), cell(si.get("SAP経験年数",""))],
-        [hdr("モジュール"), cell(si.get("モジュール","")), hdr("ポジション"), cell(si.get("ポジション","")),
-         hdr("住所"), Paragraph(bi.get("住所",""), normal), "", ""],
-        [hdr("最寄駅"), Paragraph(f"{bi.get('最寄駅路線','')} {bi.get('最寄駅名','')}駅", normal),
-         "", "", "", "", "", ""],
-    ]
-    col_w = [18*mm, 30*mm, 15*mm, 20*mm, 18*mm, 25*mm, 15*mm, 20*mm]
-    t = Table(basic_data, colWidths=col_w, repeatRows=0)
-    t.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (0,-1), header_color),
-        ("BACKGROUND", (2,0), (2,-1), header_color),
-        ("BACKGROUND", (4,0), (4,-1), header_color),
-        ("BACKGROUND", (6,0), (6,-1), header_color),
-        ("TEXTCOLOR", (0,0), (0,-1), colors.white),
-        ("TEXTCOLOR", (2,0), (2,-1), colors.white),
-        ("TEXTCOLOR", (4,0), (4,-1), colors.white),
-        ("TEXTCOLOR", (6,0), (6,-1), colors.white),
-        ("FONTNAME", (0,0), (-1,-1), fn),
-        ("FONTSIZE", (0,0), (-1,-1), 8),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("SPAN", (5,2), (7,2)),
-        ("SPAN", (1,3), (7,3)),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 3*mm))
-
-    # 取得資格
-    story.append(Table(
-        [[hdr("取得資格"), cell(data.get("取得資格",""))]],
-        colWidths=[18*mm, 162*mm],
-        style=TableStyle([
-            ("BACKGROUND", (0,0), (0,0), header_color),
-            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-            ("FONTNAME", (0,0), (-1,-1), fn),
-            ("FONTSIZE", (0,0), (-1,-1), 8),
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ])
-    ))
-    story.append(Spacer(1, 2*mm))
-
-    # 得意分野
-    story.append(Table(
-        [[hdr("得意分野"), cell(data.get("得意分野",""))]],
-        colWidths=[18*mm, 162*mm],
-        style=TableStyle([
-            ("BACKGROUND", (0,0), (0,0), header_color),
-            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-            ("FONTNAME", (0,0), (-1,-1), fn),
-            ("FONTSIZE", (0,0), (-1,-1), 8),
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ])
-    ))
-    story.append(Spacer(1, 2*mm))
-
-    # 自己PR
-    story.append(Table(
-        [[hdr("自己PR"), cell(data.get("自己PR",""))]],
-        colWidths=[18*mm, 162*mm],
-        style=TableStyle([
-            ("BACKGROUND", (0,0), (0,0), header_color),
-            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-            ("FONTNAME", (0,0), (-1,-1), fn),
-            ("FONTSIZE", (0,0), (-1,-1), 8),
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-            ("MINROWHEIGHT", (0,0), (-1,-1), 20*mm),
-        ])
-    ))
-    story.append(Spacer(1, 3*mm))
-
-    # 職務経歴ヘッダー
-    story.append(Paragraph("業　務　経　歴", title_style))
-    story.append(Spacer(1, 2*mm))
-
-    phase_labels = ["分析\n調査", "提案\n管理", "要件\n定義", "基本\n設計",
-                    "詳細\n設計", "製造", "単体\n試験", "結合\n試験", "総合\n試験", "運用\n保守"]
-    phase_keys   = ["分析調査","提案管理レビュー","要件定義","基本設計",
-                    "詳細設計","製造","単体試験","結合試験","総合試験","運用保守"]
-
-    proj_header = [
-        [hdr("No"), hdr("作業期間"), hdr("業種"),
-         hdr("システム概要・担当業務"), hdr("OS/言語/DB/ツール"),
-         hdr("役割")] + [hdr(p) for p in phase_labels]
-    ]
-    col_w2 = [8*mm, 22*mm, 15*mm, 48*mm, 30*mm, 15*mm] + [7*mm]*10
-    proj_table_data = proj_header
-
-    for proj in data.get("職務経歴", []):
-        phases = proj.get("フェーズ", {})
-        period = f"{proj.get('開始年月','')}～\n{proj.get('終了年月','')}"
-        env_text = f"{proj.get('OS_DB','')}\n{proj.get('作業環境','')}\n{proj.get('開発言語','')}"
-        content = f"{proj.get('プロジェクト概要','')}\n【担当】{proj.get('担当業務','')}"
-        row = [
-            cell(str(proj.get("No",""))),
-            cell(period, small),
-            cell(proj.get("業種","")),
-            cell(content, small),
-            cell(env_text, small),
-            cell(proj.get("役割",""))
-        ] + [cell("●" if phases.get(k) else "-") for k in phase_keys]
-        proj_table_data.append(row)
-
-    pt = Table(proj_table_data, colWidths=col_w2, repeatRows=1)
-    pt.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), header_color),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("FONTNAME", (0,0), (-1,-1), fn),
-        ("FONTSIZE", (0,0), (-1,-1), 7),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("VALIGN", (0,0), (-1,-1), "TOP"),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f0f4ff")]),
-        ("ALIGN", (0,0), (0,-1), "CENTER"),
-        ("ALIGN", (6,0), (-1,-1), "CENTER"),
-    ]))
-    story.append(pt)
-
-    doc.build(story)
-    return buffer.getvalue()
 
 
 # ─────────────────────────────────────────
@@ -783,45 +580,27 @@ if "results" in st.session_state and st.session_state["results"]:
             else:
                 st.warning("職務経歴が抽出できませんでした")
 
-            # 出力ボタン
+            # Excelダウンロードボタン
             st.markdown("---")
-            col_pdf, col_xlsx = st.columns(2)
-
-            with col_pdf:
-                try:
-                    pdf_bytes = generate_pdf(data)
-                    safe_name = safe_str(bi.get("氏名", f"skillsheet_{idx}"), f"skillsheet_{idx}").replace(" ", "_")
-                    st.download_button(
-                        label="⬇️ PDFダウンロード（自社フォーマット）",
-                        data=pdf_bytes,
-                        file_name=f"{safe_name}_職務経歴書.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                        type="primary",
-                        key=f"dl_{idx}"
-                    )
-                except Exception as e:
-                    st.error(f"PDF生成エラー: {e}")
-                    import traceback
-                    st.code(traceback.format_exc(), language="text")
-
-            with col_xlsx:
-                try:
-                    excel_bytes = generate_excel(data)
-                    safe_name = safe_str(bi.get("氏名", f"skillsheet_{idx}"), f"skillsheet_{idx}").replace(" ", "_")
-                    st.download_button(
-                        label="📊 Excelダウンロード",
-                        data=excel_bytes,
-                        file_name=f"{safe_name}_職務経歴書.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key=f"xl_{idx}"
-                    )
-                except Exception as e:
-                    st.error(f"Excel生成エラー: {e}")
+            try:
+                excel_bytes = generate_excel(data)
+                safe_name = safe_str(bi.get("氏名", f"skillsheet_{idx}"), f"skillsheet_{idx}").replace(" ", "_")
+                st.download_button(
+                    label="📊 Excelダウンロード（自社フォーマット）",
+                    data=excel_bytes,
+                    file_name=f"{safe_name}_職務経歴書.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    type="primary",
+                    key=f"xl_{idx}"
+                )
+            except Exception as e:
+                st.error(f"Excel生成エラー: {e}")
+                import traceback
+                st.code(traceback.format_exc(), language="text")
 
     # 一括PDF出力
     if len(st.session_state["results"]) > 1:
         st.divider()
         st.markdown("### 📦 一括ダウンロード")
-        st.info("複数ファイルは個別にダウンロードしてください（上記ボタン）")
+        st.info("複数ファイルは個別にExcelダウンロードしてください（上記ボタン）")
