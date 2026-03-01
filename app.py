@@ -180,7 +180,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 def extract_skills_with_gemini(file_text: str, api_key: str) -> dict:
     """Gemini APIでスキルシート情報をJSON抽出"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
     prompt = f"""
 以下はスキルシート（職務経歴書）のテキストデータです。
@@ -269,6 +269,155 @@ def extract_skills_with_gemini(file_text: str, api_key: str) -> dict:
     return json.loads(raw)
 
 
+
+# ─────────────────────────────────────────
+# ユーティリティ：None安全文字列変換
+# ─────────────────────────────────────────
+def safe_str(val, default="-"):
+    """NoneやNaN等を安全に文字列変換"""
+    if val is None:
+        return default
+    s = str(val).strip()
+    return s if s else default
+
+
+# ─────────────────────────────────────────
+# Excel出力
+# ─────────────────────────────────────────
+def generate_excel(data: dict) -> bytes:
+    """抽出データをExcel形式で出力（openpyxl）"""
+    from openpyxl import Workbook
+    from openpyxl.styles import (
+        Font, PatternFill, Alignment, Border, Side, colors as xl_colors
+    )
+    from io import BytesIO as _BytesIO
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "職務経歴書"
+
+    # スタイル定義
+    HEADER_FILL = PatternFill("solid", fgColor="1A3A6B")
+    HEADER_FONT = Font(color="FFFFFF", bold=True, size=9)
+    NORMAL_FONT = Font(size=9)
+    CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    LEFT   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    THIN   = Side(style="thin")
+    BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+    STRIPE = PatternFill("solid", fgColor="F0F4FF")
+
+    def hdr_cell(ws, row, col, value, width=None):
+        c = ws.cell(row=row, column=col, value=value)
+        c.fill = HEADER_FILL
+        c.font = HEADER_FONT
+        c.alignment = CENTER
+        c.border = BORDER
+        if width:
+            ws.column_dimensions[c.column_letter].width = width
+        return c
+
+    def val_cell(ws, row, col, value, align=LEFT):
+        c = ws.cell(row=row, column=col, value=safe_str(value))
+        c.font = NORMAL_FONT
+        c.alignment = align
+        c.border = BORDER
+        return c
+
+    bi = data.get("基本情報", {}) or {}
+    si = data.get("SAP情報", {}) or {}
+
+    # ── セクション1: 基本情報 ──
+    r = 1
+    ws.merge_cells(f"A{r}:H{r}")
+    c = ws.cell(row=r, column=1, value="職　務　経　歴　書")
+    c.font = Font(bold=True, size=14, color="1A3A6B")
+    c.alignment = CENTER
+    r += 1
+
+    basic_rows = [
+        [("フリガナ", bi.get("フリガナ")),    ("性別", bi.get("性別")),
+         ("生年月日", bi.get("生年月日")),     ("未・既婚", bi.get("未既婚"))],
+        [("氏名", bi.get("氏名")),             ("国籍", bi.get("国籍")),
+         ("日本滞在年数", bi.get("日本滞在年数")), ("SAP経験", si.get("SAP経験年数"))],
+        [("モジュール", si.get("モジュール")), ("ポジション", si.get("ポジション")),
+         ("住所", bi.get("住所")),             None],
+        [("最寄駅", f"{safe_str(bi.get('最寄駅路線',''))} {safe_str(bi.get('最寄駅名',''))}駅"),
+         None, None, None],
+    ]
+    for row_data in basic_rows:
+        col = 1
+        for item in row_data:
+            if item is None:
+                col += 2
+                continue
+            hdr_cell(ws, r, col, item[0])
+            val_cell(ws, r, col+1, item[1])
+            col += 2
+        r += 1
+
+    # ── セクション2: 資格・得意分野・自己PR ──
+    for label, key in [("取得資格", "取得資格"), ("得意分野", "得意分野"), ("自己PR", "自己PR")]:
+        hdr_cell(ws, r, 1, label)
+        ws.merge_cells(f"B{r}:H{r}")
+        c = val_cell(ws, r, 2, data.get(key))
+        ws.row_dimensions[r].height = 40
+        r += 1
+
+    r += 1  # 空行
+
+    # ── セクション3: 職務経歴 ──
+    ws.merge_cells(f"A{r}:P{r}")
+    c = ws.cell(row=r, column=1, value="業　務　経　歴")
+    c.font = Font(bold=True, size=12, color="1A3A6B")
+    c.alignment = CENTER
+    r += 1
+
+    proj_headers = [
+        "No", "開始年月", "終了年月", "業種",
+        "システム概要", "担当業務", "OS/DB", "作業環境", "開発言語", "役割",
+        "分析/調査", "提案/管理", "要件/定義", "基本/設計",
+        "詳細/設計", "製造", "単体/試験", "結合/試験", "総合/試験", "運用/保守"
+    ]
+    phase_keys = [
+        "分析調査","提案管理レビュー","要件定義","基本設計",
+        "詳細設計","製造","単体試験","結合試験","総合試験","運用保守"
+    ]
+    col_widths = [5, 10, 10, 12, 25, 20, 15, 12, 12, 10] + [6]*10
+
+    for i, (h, w) in enumerate(zip(proj_headers, col_widths), 1):
+        hdr_cell(ws, r, i, h, width=w)
+    r += 1
+
+    for pi, proj in enumerate(data.get("職務経歴", []) or []):
+        phases = proj.get("フェーズ", {}) or {}
+        fill = STRIPE if pi % 2 == 0 else PatternFill()
+        row_vals = [
+            safe_str(proj.get("No", pi+1)),
+            safe_str(proj.get("開始年月")),
+            safe_str(proj.get("終了年月")),
+            safe_str(proj.get("業種")),
+            safe_str(proj.get("プロジェクト概要")),
+            safe_str(proj.get("担当業務")),
+            safe_str(proj.get("OS_DB")),
+            safe_str(proj.get("作業環境")),
+            safe_str(proj.get("開発言語")),
+            safe_str(proj.get("役割")),
+        ] + ["●" if phases.get(k) else "-" for k in phase_keys]
+
+        for col_idx, val in enumerate(row_vals, 1):
+            c = ws.cell(row=r, column=col_idx, value=val)
+            c.font = NORMAL_FONT
+            c.alignment = LEFT if col_idx <= 10 else CENTER
+            c.border = BORDER
+            if fill.fill_type:
+                c.fill = fill
+        ws.row_dimensions[r].height = 30
+        r += 1
+
+    buf = _BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
 # ─────────────────────────────────────────
 # PDF生成
 # ─────────────────────────────────────────
@@ -298,7 +447,7 @@ def generate_pdf(data: dict) -> bytes:
         return Paragraph(f"<b>{text}</b>", header_style)
 
     def cell(text, style=normal):
-        return Paragraph(str(text) if text else "-", style)
+        return Paragraph(safe_str(text), style)
 
     story = []
     bi = data.get("基本情報", {})
@@ -579,22 +728,42 @@ if "results" in st.session_state and st.session_state["results"]:
             else:
                 st.warning("職務経歴が抽出できませんでした")
 
-            # PDF出力ボタン
+            # 出力ボタン
             st.markdown("---")
-            try:
-                pdf_bytes = generate_pdf(data)
-                safe_name = bi.get("氏名", f"skillsheet_{idx}").replace(" ", "_")
-                st.download_button(
-                    label="⬇️ PDFダウンロード（自社フォーマット）",
-                    data=pdf_bytes,
-                    file_name=f"{safe_name}_職務経歴書.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    type="primary",
-                    key=f"dl_{idx}"
-                )
-            except Exception as e:
-                st.error(f"PDF生成エラー: {e}")
+            col_pdf, col_xlsx = st.columns(2)
+
+            with col_pdf:
+                try:
+                    pdf_bytes = generate_pdf(data)
+                    safe_name = safe_str(bi.get("氏名", f"skillsheet_{idx}"), f"skillsheet_{idx}").replace(" ", "_")
+                    st.download_button(
+                        label="⬇️ PDFダウンロード（自社フォーマット）",
+                        data=pdf_bytes,
+                        file_name=f"{safe_name}_職務経歴書.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                        type="primary",
+                        key=f"dl_{idx}"
+                    )
+                except Exception as e:
+                    st.error(f"PDF生成エラー: {e}")
+                    import traceback
+                    st.code(traceback.format_exc(), language="text")
+
+            with col_xlsx:
+                try:
+                    excel_bytes = generate_excel(data)
+                    safe_name = safe_str(bi.get("氏名", f"skillsheet_{idx}"), f"skillsheet_{idx}").replace(" ", "_")
+                    st.download_button(
+                        label="📊 Excelダウンロード",
+                        data=excel_bytes,
+                        file_name=f"{safe_name}_職務経歴書.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key=f"xl_{idx}"
+                    )
+                except Exception as e:
+                    st.error(f"Excel生成エラー: {e}")
 
     # 一括PDF出力
     if len(st.session_state["results"]) > 1:
