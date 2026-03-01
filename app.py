@@ -36,20 +36,59 @@ try:
 except Exception:
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-# 日本語フォント設定（IPAゴシック or Noto Sans）
-FONT_NAME = "IPAGothic"
-try:
-    import subprocess
-    result = subprocess.run(
-        ["fc-list", ":lang=ja", "--format=%{file}\n"],
-        capture_output=True, text=True
-    )
-    font_paths = [l for l in result.stdout.splitlines() if l.endswith(".ttf") or l.endswith(".TTF")]
-    FONT_PATH = font_paths[0] if font_paths else None
-    if FONT_PATH:
-        pdfmetrics.registerFont(TTFont(FONT_NAME, FONT_PATH))
-except Exception:
-    FONT_PATH = None
+# 日本語フォント設定（優先順位付きで検索）
+FONT_NAME = "JPFont"
+FONT_PATH = None
+
+# 候補フォントパスリスト（Linux/Mac/Windows対応）
+_font_candidates = [
+    # Streamlit Cloud (Ubuntu) - IPAフォント
+    "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
+    "/usr/share/fonts/truetype/ipafont-gothic/ipagp.ttf",
+    "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+    "/usr/share/fonts/truetype/ipafont-gothic/ipag.ttf",
+    "/usr/share/fonts/opentype/ipafont/ipagp.ttf",
+    "/usr/share/fonts/truetype/ipafont/ipagp.ttf",
+    # Streamlit Cloud - Noto CJK
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    # macOS
+    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+    "/Library/Fonts/Arial Unicode MS.ttf",
+    # Windows
+    "C:/Windows/Fonts/msgothic.ttc",
+    "C:/Windows/Fonts/YuGothM.ttc",
+    "C:/Windows/Fonts/meiryo.ttc",
+]
+
+for _p in _font_candidates:
+    if os.path.exists(_p):
+        try:
+            pdfmetrics.registerFont(TTFont(FONT_NAME, _p))
+            FONT_PATH = _p
+            break
+        except Exception:
+            continue
+
+# fc-list でも検索（上記で見つからない場合）
+if not FONT_PATH:
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["fc-list", ":lang=ja", "--format=%{file}\n"],
+            capture_output=True, text=True, timeout=5
+        )
+        for _p in result.stdout.splitlines():
+            if _p.endswith((".ttf", ".TTF", ".otf")):
+                try:
+                    pdfmetrics.registerFont(TTFont(FONT_NAME, _p))
+                    FONT_PATH = _p
+                    break
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────
 # ページ設定
@@ -141,7 +180,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 def extract_skills_with_gemini(file_text: str, api_key: str) -> dict:
     """Gemini APIでスキルシート情報をJSON抽出"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
+    model = genai.GenerativeModel("gemini-2.0-flash-lite")
 
     prompt = f"""
 以下はスキルシート（職務経歴書）のテキストデータです。
