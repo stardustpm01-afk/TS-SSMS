@@ -222,27 +222,8 @@ def safe_str(val, default="-"):
 # Excel出力
 # ─────────────────────────────────────────
 def generate_excel(data: dict) -> bytes:
-    """
-    抽出データを整形されたExcel形式で出力（罫線完全修正版）
-
-    【修正ポイント】
-    openpyxl はマージ後の内側セルをXMLに記録しない。
-    そのためマージ前に全セルの外枠罫線を設定する。
-
-    【列構成 全17列 A-Q】
-    A=No  B=開始年月  C=終了年月  D=業種
-    E=システム概要・担当業務  F=OS/言語/DB/ツール  G=役割
-    H-Q=フェーズ10列
-
-    【基本情報（縦線統一）】
-    Row2: A B-D E F-G H I-L M N-Q （4グループ）
-    Row3: 同上
-    Row4: A B-D E F-G H I-Q      （住所を H列右から）
-    Row5: A B-Q                  （最寄駅）
-    """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.page import PageMargins
     from io import BytesIO as _BytesIO
 
@@ -250,185 +231,243 @@ def generate_excel(data: dict) -> bytes:
     ws = wb.active
     ws.title = "職務経歴書"
 
-    # ── スタイル定義 ────────────────────────────────
-    HDR_FILL   = PatternFill("solid", fgColor="1A3A6B")
-    HDR_FONT   = Font(name="Meiryo UI", color="FFFFFF", bold=True, size=9)
-    VAL_FONT   = Font(name="Meiryo UI", size=9)
-    TTL_FONT   = Font(name="Meiryo UI", bold=True, size=14, color="1A3A6B")
-    SEC_FONT   = Font(name="Meiryo UI", bold=True, size=11, color="1A3A6B")
-    STRIPE     = PatternFill("solid", fgColor="EEF2FF")
-    THIN       = Side(style="thin")
-    NONE_S     = Side(style=None)
-    BORDER     = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-    C_CENTER   = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    C_LEFT     = Alignment(horizontal="left",   vertical="center", wrap_text=True)
-    C_LEFT_TOP = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
+    # グリッド線を非表示（記入エリア外をすっきり見せる）
+    ws.sheet_view.showGridLines = False
 
-    # ────────────────────────────────────────────────────────────────────
-    # 【核心修正】マージ前に全セルの外枠罫線を設定するヘルパー
-    # ────────────────────────────────────────────────────────────────────
-    def _pre_border(r1, c1, r2, c2):
-        """
-        マージ前に範囲 (r1,c1)-(r2,c2) の全セルに外枠罫線を設定。
-        左端列 → 左罫線のみ / 右端列 → 右罫線のみ / 上下端行 → 上下罫線
-        ※ マージ前に呼ぶこと！
-        """
-        for row in range(r1, r2 + 1):
-            for col in range(c1, c2 + 1):
-                L = THIN if col == c1 else NONE_S
-                R = THIN if col == c2 else NONE_S
-                T = THIN if row == r1 else NONE_S
-                B = THIN if row == r2 else NONE_S
-                ws.cell(row=row, column=col).border = Border(
-                    left=L, right=R, top=T, bottom=B)
+    # ── スタイル定義 ──────────────────────────────────────
+    NAVY      = "1A3A6B"
+    WHITE     = "FFFFFF"
+    STRIPE_C  = "EEF2FF"
 
-    # ── ヘルパー関数 ────────────────────────────────
-    def _hdr(r, c, v):
-        """ヘッダーセル（単一セル・紺背景・白文字）"""
-        cell = ws.cell(row=r, column=c, value=v)
-        cell.fill      = HDR_FILL
-        cell.font      = HDR_FONT
-        cell.alignment = C_CENTER
-        cell.border    = BORDER          # 単一セルは直接設定
-        return cell
+    HDR_FILL  = PatternFill("solid", fgColor=NAVY)
+    STR_FILL  = PatternFill("solid", fgColor=STRIPE_C)
+    WHT_FILL  = PatternFill("solid", fgColor=WHITE)
 
-    def _mhdr(r, c1, c2, v):
-        """マージヘッダー（紺背景）- マージ前に罫線設定"""
-        _pre_border(r, c1, r, c2)
-        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
-        cell = ws.cell(row=r, column=c1, value=v)
-        cell.fill      = HDR_FILL
-        cell.font      = HDR_FONT
-        cell.alignment = C_CENTER
-        return cell
+    HDR_FONT  = Font(name="Meiryo UI", color=WHITE,  bold=True, size=9)
+    VAL_FONT  = Font(name="Meiryo UI", color="000000", size=9)
+    TTL_FONT  = Font(name="Meiryo UI", color=NAVY,   bold=True, size=13)
+    SEC_FONT  = Font(name="Meiryo UI", color=NAVY,   bold=True, size=10)
 
-    def _mval(r, c1, c2, v, align=None):
-        """マージ値セル - マージ前に罫線設定（核心修正）"""
-        _pre_border(r, c1, r, c2)                          # ← マージ前に罫線！
-        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
-        cell = ws.cell(row=r, column=c1, value=safe_str(v))
-        cell.font      = VAL_FONT
-        cell.alignment = align or C_LEFT
-        return cell
+    THIN      = Side(style="thin")
+    NO_SIDE   = Side(style=None)
+    FULL_B    = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    def _title_row(r, c1, c2, v, font=None, align=None):
-        """タイトル・セクション行（マージ）"""
-        _pre_border(r, c1, r, c2)
-        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
-        cell = ws.cell(row=r, column=c1, value=v)
-        cell.font      = font  or TTL_FONT
-        cell.alignment = align or C_CENTER
-        return cell
+    AL_CC  = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    AL_LC  = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    AL_LT  = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
 
-    def _row_h(r, *texts, min_h=18, cpl=40):
-        """テキスト量から行高さを動的設定"""
-        max_lines = 1
-        for t in texts:
-            s = str(t or "")
-            lines = s.count("\n") + max(1, len(s) // cpl)
-            max_lines = max(max_lines, lines)
-        ws.row_dimensions[r].height = max(min_h, max_lines * 13)
+    # ── 列数・列幅 ──────────────────────────────────────
+    NCOLS = 17   # A(1) 〜 Q(17)
 
-    # ── 列幅設定（全17列 A-Q）────────────────────────
-    col_w = {
-        "A": 5,   "B": 10,  "C": 10,  "D": 13,
-        "E": 48,  "F": 20,  "G": 8,
-        "H": 5,   "I": 5,   "J": 5,   "K": 5,   "L": 5,
-        "M": 5,   "N": 5,   "O": 5,   "P": 5,   "Q": 5,
+    # 列幅: A=No/hdr, B-C=日付, D=業種, E=概要(広), F=OS/DB, G=役割, H-Q=フェーズ×10
+    col_widths = {
+        1: 6,    # A
+        2: 9,    # B
+        3: 9,    # C
+        4: 10,   # D
+        5: 42,   # E  ← 概要・担当業務（基本情報では値エリアに使用）
+        6: 18,   # F
+        7: 7,    # G
+        8: 5,    # H
+        9: 5,    # I
+        10: 5,   # J
+        11: 5,   # K
+        12: 5,   # L
+        13: 5,   # M
+        14: 5,   # N
+        15: 5,   # O
+        16: 5,   # P
+        17: 5,   # Q
     }
-    for cl, w in col_w.items():
-        ws.column_dimensions[cl].width = w
+    from openpyxl.utils import get_column_letter
+    for col_i, w in col_widths.items():
+        ws.column_dimensions[get_column_letter(col_i)].width = w
 
-    # ── ページ設定（A4横向き） ─────────────────────────
+    # ── ページ設定（A4横）──────────────────────────────
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize   = 9
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0
-    ws.page_margins = PageMargins(left=0.5, right=0.5, top=0.75, bottom=0.75)
+    ws.page_margins = PageMargins(left=0.4, right=0.4, top=0.6, bottom=0.6)
 
+    # ════════════════════════════════════════════════════
+    # ヘルパー：マージ前に外枠罫線を設定してからマージ
+    # ════════════════════════════════════════════════════
+    def _border_then_merge(r1, c1, r2, c2):
+        """全セルに外枠罫線を設定 → マージ"""
+        for row in range(r1, r2 + 1):
+            for col in range(c1, c2 + 1):
+                L = THIN if col == c1 else NO_SIDE
+                R = THIN if col == c2 else NO_SIDE
+                T = THIN if row == r1 else NO_SIDE
+                B = THIN if row == r2 else NO_SIDE
+                ws.cell(row=row, column=col).border = Border(
+                    left=L, right=R, top=T, bottom=B)
+        ws.merge_cells(
+            start_row=r1, start_column=c1,
+            end_row=r2,   end_column=c2)
+
+    def _hdr(row, col, text):
+        """単一ヘッダーセル（紺背景・白字）"""
+        c = ws.cell(row=row, column=col, value=text)
+        c.fill, c.font, c.alignment, c.border = HDR_FILL, HDR_FONT, AL_CC, FULL_B
+
+    def _hdr_m(row, c1, c2, text):
+        """マージヘッダーセル（紺背景・白字）"""
+        _border_then_merge(row, c1, row, c2)
+        c = ws.cell(row=row, column=c1, value=text)
+        c.fill, c.font, c.alignment = HDR_FILL, HDR_FONT, AL_CC
+
+    def _val_m(row, c1, c2, text, align=None, fill=None):
+        """マージ値セル（白背景）"""
+        _border_then_merge(row, c1, row, c2)
+        c = ws.cell(row=row, column=c1, value=safe_str(text))
+        c.font, c.alignment = VAL_FONT, (align or AL_LC)
+        c.fill = fill or WHT_FILL
+
+    def _val(row, col, text, align=None, fill=None):
+        """単一値セル"""
+        c = ws.cell(row=row, column=col, value=safe_str(text))
+        c.font, c.alignment, c.border = VAL_FONT, (align or AL_LC), FULL_B
+        c.fill = fill or WHT_FILL
+
+    def _title_m(row, c1, c2, text, font, align=AL_CC, fill=None):
+        """タイトル・セクション行（マージ）"""
+        _border_then_merge(row, c1, row, c2)
+        c = ws.cell(row=row, column=c1, value=text)
+        c.font, c.alignment = font, align
+        if fill: c.fill = fill
+
+    def _auto_height(row, *texts, base=18, chars_per_line=38):
+        max_lines = 1
+        for t in texts:
+            s = str(t or "")
+            n = s.count("\n") + max(1, (len(s) + chars_per_line - 1) // chars_per_line)
+            max_lines = max(max_lines, n)
+        ws.row_dimensions[row].height = max(base, max_lines * 13)
+
+    # ════════════════════════════════════════════════════
+    # データ取得
+    # ════════════════════════════════════════════════════
     bi = data.get("基本情報", {}) or {}
     si = data.get("SAP情報",  {}) or {}
 
-    # ══ Row1: タイトル ════════════════════════════════
-    _title_row(1, 1, 17, "職　務　経　歴　書", TTL_FONT, C_CENTER)
-    ws.row_dimensions[1].height = 28
-    r = 2
+    r = 1  # 現在行
 
-    # ══ Row2: フリガナ / 性別 / 生年月日 / 未・既婚 ══════
-    # 縦区切り: 1|2, 4|5, 5|6, 7|8, 8|9, 12|13, 13|14, 17
-    _hdr(r, 1,  "フリガナ");   _mval(r, 2,  4,  bi.get("フリガナ"))
-    _hdr(r, 5,  "性別");       _mval(r, 6,  7,  bi.get("性別"), C_CENTER)
-    _hdr(r, 8,  "生年月日");   _mval(r, 9,  12, bi.get("生年月日"))
-    _hdr(r, 13, "未・既婚");   _mval(r, 14, 17, bi.get("未既婚"), C_CENTER)
-    ws.row_dimensions[r].height = 18;  r += 1
+    # ══ Row1: タイトル ══════════════════════════════════
+    _title_m(r, 1, NCOLS, "職　務　経　歴　書", TTL_FONT)
+    ws.row_dimensions[r].height = 30
+    r += 1
 
-    # ══ Row3: 氏名 / 国籍 / 日本滞在 / SAP経験 ══════════
-    # 縦区切り: 同上（統一）
-    _hdr(r, 1,  "氏　名");     _mval(r, 2,  4,  bi.get("氏名"))
-    _hdr(r, 5,  "国籍");       _mval(r, 6,  7,  bi.get("国籍"), C_CENTER)
-    _hdr(r, 8,  "日本滞在");   _mval(r, 9,  12, bi.get("日本滞在年数"))
-    _hdr(r, 13, "SAP経験");    _mval(r, 14, 17, si.get("SAP経験年数"), C_CENTER)
-    ws.row_dimensions[r].height = 18;  r += 1
+    # ══ Row2〜4: 基本情報（全行で列区切りを統一） ════════
+    #
+    # 【列区切り統一】
+    #   Col1      : ラベル（単一・紺）
+    #   Col2-4    : 値①
+    #   Col5      : ラベル（単一・紺）
+    #   Col6-9    : 値②
+    #   Col10     : ラベル（単一・紺）
+    #   Col11-13  : 値③
+    #   Col14     : ラベル（単一・紺）
+    #   Col15-17  : 値④
+    #
+    # Row2: フリガナ | 値 | 性別 | 値 | 生年月日 | 値 | 未・既婚 | 値
+    # Row3: 氏名    | 値 | 国籍  | 値 | 日本滞在  | 値 | SAP経験  | 値
+    # Row4: モジュール | 値 | ポジション | 値 | 住所 | 値(span to end)
 
-    # ══ Row4: モジュール / ポジション / 住所 ═════════════
-    # 縦区切り: 1|2, 4|5, 5|6, 7|8, 8|9 ← Row2/3と最大限一致
-    _hdr(r, 1, "モジュール");  _mval(r, 2, 4,  si.get("モジュール"))
-    _hdr(r, 5, "ポジション");  _mval(r, 6, 7,  si.get("ポジション"))
-    _hdr(r, 8, "住　所");      _mval(r, 9, 17, bi.get("住所"))
-    ws.row_dimensions[r].height = 18;  r += 1
+    # Row2
+    _hdr(r, 1,  "フリガナ")
+    _val_m(r, 2,  4,  bi.get("フリガナ"))
+    _hdr(r, 5,  "性別")
+    _val_m(r, 6,  9,  bi.get("性別"), AL_CC)
+    _hdr(r, 10, "生年月日")
+    _val_m(r, 11, 13, bi.get("生年月日"))
+    _hdr(r, 14, "未・既婚")
+    _val_m(r, 15, 17, bi.get("未既婚"), AL_CC)
+    ws.row_dimensions[r].height = 18
+    r += 1
 
-    # ══ Row5: 最寄駅 ══════════════════════════════════
+    # Row3
+    _hdr(r, 1,  "氏　名")
+    _val_m(r, 2,  4,  bi.get("氏名"))
+    _hdr(r, 5,  "国籍")
+    _val_m(r, 6,  9,  bi.get("国籍"), AL_CC)
+    _hdr(r, 10, "日本滞在")
+    _val_m(r, 11, 13, bi.get("日本滞在年数"))
+    _hdr(r, 14, "SAP経験")
+    _val_m(r, 15, 17, si.get("SAP経験年数"), AL_CC)
+    ws.row_dimensions[r].height = 18
+    r += 1
+
+    # Row4: モジュール / ポジション / 住所（住所は残り全列）
+    _hdr(r, 1,  "モジュール")
+    _val_m(r, 2,  4,  si.get("モジュール"))
+    _hdr(r, 5,  "ポジション")
+    _val_m(r, 6,  9,  si.get("ポジション"))
+    _hdr(r, 10, "住　所")
+    _val_m(r, 11, 17, bi.get("住所"))
+    ws.row_dimensions[r].height = 18
+    r += 1
+
+    # Row5: 最寄駅
     _hdr(r, 1, "最寄駅")
     route   = safe_str(bi.get("最寄駅路線", ""), "")
     name    = safe_str(bi.get("最寄駅名",   ""), "")
-    station = " ".join(filter(None, [
-        route,
-        (name + "駅") if name else ""
-    ])) or safe_str(bi.get("最寄駅", ""))
-    _mval(r, 2, 17, station)
-    ws.row_dimensions[r].height = 18;  r += 1
+    station = " ".join(filter(None, [route, (name + "駅") if name else ""])) \
+              or safe_str(bi.get("最寄駅", ""))
+    _val_m(r, 2, 17, station)
+    ws.row_dimensions[r].height = 18
+    r += 1
 
-    # ══ Row6-8: 資格・得意分野・自己PR ═══════════════════
-    for label, key, min_h, cpl in [
-        ("取得資格", "取得資格", 18, 80),
-        ("得意分野", "得意分野", 18, 80),
-        ("自己ＰＲ", "自己PR",  36, 50),
-    ]:
-        _hdr(r, 1, label)
-        _mval(r, 2, 17, data.get(key), C_LEFT_TOP)
-        _row_h(r, data.get(key), min_h=min_h, cpl=cpl)
-        r += 1
+    # Row6: 取得資格
+    _hdr(r, 1, "取得資格")
+    _val_m(r, 2, 17, data.get("取得資格"), AL_LT)
+    _auto_height(r, data.get("取得資格"), base=18, chars_per_line=90)
+    r += 1
 
-    # 区切り空行
-    ws.row_dimensions[r].height = 5;  r += 1
+    # Row7: 得意分野
+    _hdr(r, 1, "得意分野")
+    _val_m(r, 2, 17, data.get("得意分野"), AL_LT)
+    _auto_height(r, data.get("得意分野"), base=18, chars_per_line=90)
+    r += 1
 
-    # ══ 業務経歴タイトル ══════════════════════════════
-    _title_row(r, 1, 17, "業　務　経　歴", SEC_FONT, C_CENTER)
-    ws.row_dimensions[r].height = 22;  r += 1
+    # Row8: 自己PR
+    _hdr(r, 1, "自己ＰＲ")
+    _val_m(r, 2, 17, data.get("自己PR"), AL_LT)
+    _auto_height(r, data.get("自己PR"), base=36, chars_per_line=50)
+    r += 1
 
-    # ══ 業務経歴ヘッダー行 ═══════════════════════════
+    # 区切り空行（罫線なし・白）
+    ws.row_dimensions[r].height = 6
+    r += 1
+
+    # ══ 業務経歴タイトル ════════════════════════════════
+    _title_m(r, 1, NCOLS, "業　務　経　歴", SEC_FONT)
+    ws.row_dimensions[r].height = 22
+    r += 1
+
+    # ══ 業務経歴ヘッダー ════════════════════════════════
     proj_header_row = r
-    h_vals = [
+    for ci, hv in enumerate([
         "No", "開始\n年月", "終了\n年月", "業種",
-        "システム概要・担当業務",
-        "OS/言語/DB/ツール", "役割",
-        "分析\n調査","提案\n管理","要件\n定義","基本\n設計",
-        "詳細\n設計","製造","単体\n試験","結合\n試験","総合\n試験","運用\n保守"
-    ]
-    for ci, hv in enumerate(h_vals, 1):
+        "システム概要・担当業務", "OS/言語/DB/ツール", "役割",
+        "分析\n調査", "提案\n管理", "要件\n定義", "基本\n設計",
+        "詳細\n設計", "製造", "単体\n試験", "結合\n試験", "総合\n試験", "運用\n保守"
+    ], 1):
         _hdr(r, ci, hv)
-    ws.row_dimensions[r].height = 30;  r += 1
+    ws.row_dimensions[r].height = 30
+    r += 1
 
-    # ══ 業務経歴データ行 ══════════════════════════════
+    # ══ 業務経歴データ ══════════════════════════════════
     phase_keys = [
-        "分析調査","提案管理レビュー","要件定義","基本設計",
-        "詳細設計","製造","単体試験","結合試験","総合試験","運用保守"
+        "分析調査", "提案管理レビュー", "要件定義", "基本設計",
+        "詳細設計", "製造", "単体試験", "結合試験", "総合試験", "運用保守"
     ]
 
     for pi, proj in enumerate(data.get("職務経歴", []) or []):
-        phases = proj.get("フェーズ", {}) or {}
-        bg     = STRIPE if pi % 2 == 0 else None
+        phases  = proj.get("フェーズ", {}) or {}
+        row_bg  = STR_FILL if pi % 2 == 0 else WHT_FILL
 
         overview = safe_str(proj.get("プロジェクト概要"))
         tasks    = safe_str(proj.get("担当業務"))
@@ -438,44 +477,32 @@ def generate_excel(data: dict) -> bytes:
         os_db    = safe_str(proj.get("OS_DB"))
         env      = safe_str(proj.get("作業環境"))
         lang     = safe_str(proj.get("開発言語"))
-        env_text = "\n".join(x for x in [os_db, env, lang] if x and x != "-")
+        env_text = "\n".join(x for x in [os_db, env, lang] if x and x != "-") or "-"
 
-        row_vals = [
+        row_data = [
             safe_str(proj.get("No", pi + 1)),
             safe_str(proj.get("開始年月")),
             safe_str(proj.get("終了年月")),
             safe_str(proj.get("業種")),
             combined,
-            env_text or "-",
+            env_text,
             safe_str(proj.get("役割")),
         ] + ["●" if phases.get(k) else "" for k in phase_keys]
 
-        for ci, v in enumerate(row_vals, 1):
-            if ci <= 3:
-                align = C_CENTER
-            elif ci in (5, 6):
-                align = C_LEFT_TOP
-            else:
-                align = C_CENTER if ci >= 8 else C_LEFT
-            cell = ws.cell(row=r, column=ci, value=v)
-            cell.font      = VAL_FONT
-            cell.alignment = align
-            cell.border    = BORDER
-            if bg:
-                cell.fill = bg
+        for ci, v in enumerate(row_data, 1):
+            al = AL_CC if (ci <= 3 or ci >= 8) else (AL_LT if ci in (5, 6) else AL_LC)
+            _val(r, ci, v, al, row_bg)
 
-        _row_h(r, combined, env_text, min_h=25, cpl=38)
+        _auto_height(r, combined, env_text, base=25, chars_per_line=36)
         r += 1
 
-    # フリーズペイン・印刷範囲
+    # ── フリーズ・印刷範囲 ────────────────────────────
     ws.freeze_panes = ws.cell(row=proj_header_row + 1, column=1)
     ws.print_area   = f"A1:Q{r - 1}"
 
     buf = _BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
-
 
 
 # ─────────────────────────────────────────
