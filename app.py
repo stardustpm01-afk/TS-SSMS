@@ -223,18 +223,22 @@ def safe_str(val, default="-"):
 # ─────────────────────────────────────────
 def generate_excel(data: dict) -> bytes:
     """
-    抽出データを整形されたExcel形式で出力
+    抽出データを整形されたExcel形式で出力（罫線完全修正版）
+
+    【修正ポイント】
+    openpyxl はマージ後の内側セルをXMLに記録しない。
+    そのためマージ前に全セルの外枠罫線を設定する。
 
     【列構成 全17列 A-Q】
     A=No  B=開始年月  C=終了年月  D=業種
     E=システム概要・担当業務  F=OS/言語/DB/ツール  G=役割
     H-Q=フェーズ10列
 
-    【基本情報 行割り当て（17列で隙間なし）】
-    Row2: A(フリガナ HDR) B-D(値) E(性別 HDR) F-G(値) H(生年月日 HDR) I-L(値) M(未・既婚 HDR) N-Q(値)
-    Row3: A(氏名 HDR)    B-D(値) E(国籍 HDR)  F-G(値) H(日本滞在 HDR) I-L(値) M(SAP経験 HDR)  N-Q(値)
-    Row4: A(モジュール HDR) B-D(値) E(ポジション HDR) F-H(値) I(住所 HDR) J-Q(値)
-    Row5: A(最寄駅 HDR) B-Q(値)
+    【基本情報（縦線統一）】
+    Row2: A B-D E F-G H I-L M N-Q （4グループ）
+    Row3: 同上
+    Row4: A B-D E F-G H I-Q      （住所を H列右から）
+    Row5: A B-Q                  （最寄駅）
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -254,33 +258,70 @@ def generate_excel(data: dict) -> bytes:
     SEC_FONT   = Font(name="Meiryo UI", bold=True, size=11, color="1A3A6B")
     STRIPE     = PatternFill("solid", fgColor="EEF2FF")
     THIN       = Side(style="thin")
+    NONE_S     = Side(style=None)
     BORDER     = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
     C_CENTER   = Alignment(horizontal="center", vertical="center", wrap_text=True)
     C_LEFT     = Alignment(horizontal="left",   vertical="center", wrap_text=True)
     C_LEFT_TOP = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
 
+    # ────────────────────────────────────────────────────────────────────
+    # 【核心修正】マージ前に全セルの外枠罫線を設定するヘルパー
+    # ────────────────────────────────────────────────────────────────────
+    def _pre_border(r1, c1, r2, c2):
+        """
+        マージ前に範囲 (r1,c1)-(r2,c2) の全セルに外枠罫線を設定。
+        左端列 → 左罫線のみ / 右端列 → 右罫線のみ / 上下端行 → 上下罫線
+        ※ マージ前に呼ぶこと！
+        """
+        for row in range(r1, r2 + 1):
+            for col in range(c1, c2 + 1):
+                L = THIN if col == c1 else NONE_S
+                R = THIN if col == c2 else NONE_S
+                T = THIN if row == r1 else NONE_S
+                B = THIN if row == r2 else NONE_S
+                ws.cell(row=row, column=col).border = Border(
+                    left=L, right=R, top=T, bottom=B)
+
     # ── ヘルパー関数 ────────────────────────────────
     def _hdr(r, c, v):
-        """ヘッダーセル（紺背景・白文字）"""
+        """ヘッダーセル（単一セル・紺背景・白文字）"""
         cell = ws.cell(row=r, column=c, value=v)
-        cell.fill, cell.font, cell.alignment, cell.border = HDR_FILL, HDR_FONT, C_CENTER, BORDER
+        cell.fill      = HDR_FILL
+        cell.font      = HDR_FONT
+        cell.alignment = C_CENTER
+        cell.border    = BORDER          # 単一セルは直接設定
         return cell
 
-    def _val(r, c, v, align=None):
-        """値セル"""
-        cell = ws.cell(row=r, column=c, value=safe_str(v))
-        cell.font, cell.alignment, cell.border = VAL_FONT, (align or C_LEFT), BORDER
+    def _mhdr(r, c1, c2, v):
+        """マージヘッダー（紺背景）- マージ前に罫線設定"""
+        _pre_border(r, c1, r, c2)
+        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+        cell = ws.cell(row=r, column=c1, value=v)
+        cell.fill      = HDR_FILL
+        cell.font      = HDR_FONT
+        cell.alignment = C_CENTER
         return cell
 
     def _mval(r, c1, c2, v, align=None):
-        """c1からc2をマージして値を入れる（隙間なし保証）"""
+        """マージ値セル - マージ前に罫線設定（核心修正）"""
+        _pre_border(r, c1, r, c2)                          # ← マージ前に罫線！
         ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
         cell = ws.cell(row=r, column=c1, value=safe_str(v))
-        cell.font, cell.alignment, cell.border = VAL_FONT, (align or C_LEFT), BORDER
+        cell.font      = VAL_FONT
+        cell.alignment = align or C_LEFT
+        return cell
+
+    def _title_row(r, c1, c2, v, font=None, align=None):
+        """タイトル・セクション行（マージ）"""
+        _pre_border(r, c1, r, c2)
+        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+        cell = ws.cell(row=r, column=c1, value=v)
+        cell.font      = font  or TTL_FONT
+        cell.alignment = align or C_CENTER
         return cell
 
     def _row_h(r, *texts, min_h=18, cpl=40):
-        """複数テキストの最大行数から行高さを設定"""
+        """テキスト量から行高さを動的設定"""
         max_lines = 1
         for t in texts:
             s = str(t or "")
@@ -295,12 +336,12 @@ def generate_excel(data: dict) -> bytes:
         "H": 5,   "I": 5,   "J": 5,   "K": 5,   "L": 5,
         "M": 5,   "N": 5,   "O": 5,   "P": 5,   "Q": 5,
     }
-    for col_letter, w in col_w.items():
-        ws.column_dimensions[col_letter].width = w
+    for cl, w in col_w.items():
+        ws.column_dimensions[cl].width = w
 
-    # ── ページ設定（A4横向き印刷） ─────────────────────
+    # ── ページ設定（A4横向き） ─────────────────────────
     ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize   = 9       # A4
+    ws.page_setup.paperSize   = 9
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0
@@ -310,15 +351,12 @@ def generate_excel(data: dict) -> bytes:
     si = data.get("SAP情報",  {}) or {}
 
     # ══ Row1: タイトル ════════════════════════════════
-    r = 1
-    ws.merge_cells("A1:Q1")
-    t = ws.cell(row=1, column=1, value="職　務　経　歴　書")
-    t.font, t.alignment = TTL_FONT, C_CENTER
+    _title_row(1, 1, 17, "職　務　経　歴　書", TTL_FONT, C_CENTER)
     ws.row_dimensions[1].height = 28
     r = 2
 
     # ══ Row2: フリガナ / 性別 / 生年月日 / 未・既婚 ══════
-    # A(1)  B-D(2-4)  E(5)  F-G(6-7)  H(8)  I-L(9-12)  M(13)  N-Q(14-17)
+    # 縦区切り: 1|2, 4|5, 5|6, 7|8, 8|9, 12|13, 13|14, 17
     _hdr(r, 1,  "フリガナ");   _mval(r, 2,  4,  bi.get("フリガナ"))
     _hdr(r, 5,  "性別");       _mval(r, 6,  7,  bi.get("性別"), C_CENTER)
     _hdr(r, 8,  "生年月日");   _mval(r, 9,  12, bi.get("生年月日"))
@@ -326,7 +364,7 @@ def generate_excel(data: dict) -> bytes:
     ws.row_dimensions[r].height = 18;  r += 1
 
     # ══ Row3: 氏名 / 国籍 / 日本滞在 / SAP経験 ══════════
-    # A(1)  B-D(2-4)  E(5)  F-G(6-7)  H(8)  I-L(9-12)  M(13)  N-Q(14-17)
+    # 縦区切り: 同上（統一）
     _hdr(r, 1,  "氏　名");     _mval(r, 2,  4,  bi.get("氏名"))
     _hdr(r, 5,  "国籍");       _mval(r, 6,  7,  bi.get("国籍"), C_CENTER)
     _hdr(r, 8,  "日本滞在");   _mval(r, 9,  12, bi.get("日本滞在年数"))
@@ -334,25 +372,28 @@ def generate_excel(data: dict) -> bytes:
     ws.row_dimensions[r].height = 18;  r += 1
 
     # ══ Row4: モジュール / ポジション / 住所 ═════════════
-    # A(1)  B-D(2-4)  E(5)  F-H(6-8)  I(9)  J-Q(10-17)
-    _hdr(r, 1, "モジュール");  _mval(r, 2, 4, si.get("モジュール"))
-    _hdr(r, 5, "ポジション");  _mval(r, 6, 8, si.get("ポジション"))
-    _hdr(r, 9, "住　所");      _mval(r, 10, 17, bi.get("住所"))
+    # 縦区切り: 1|2, 4|5, 5|6, 7|8, 8|9 ← Row2/3と最大限一致
+    _hdr(r, 1, "モジュール");  _mval(r, 2, 4,  si.get("モジュール"))
+    _hdr(r, 5, "ポジション");  _mval(r, 6, 7,  si.get("ポジション"))
+    _hdr(r, 8, "住　所");      _mval(r, 9, 17, bi.get("住所"))
     ws.row_dimensions[r].height = 18;  r += 1
 
     # ══ Row5: 最寄駅 ══════════════════════════════════
-    # A(1)  B-Q(2-17)
     _hdr(r, 1, "最寄駅")
-    station = f"{safe_str(bi.get('最寄駅路線',''), '')} {safe_str(bi.get('最寄駅名',''), '')}駅".strip()
-    _mval(r, 2, 17, station if station not in ("駅", " 駅") else "-")
+    route   = safe_str(bi.get("最寄駅路線", ""), "")
+    name    = safe_str(bi.get("最寄駅名",   ""), "")
+    station = " ".join(filter(None, [
+        route,
+        (name + "駅") if name else ""
+    ])) or safe_str(bi.get("最寄駅", ""))
+    _mval(r, 2, 17, station)
     ws.row_dimensions[r].height = 18;  r += 1
 
     # ══ Row6-8: 資格・得意分野・自己PR ═══════════════════
-    # A(1)  B-Q(2-17)
     for label, key, min_h, cpl in [
         ("取得資格", "取得資格", 18, 80),
         ("得意分野", "得意分野", 18, 80),
-        ("自己ＰＲ", "自己PR",   36, 50),
+        ("自己ＰＲ", "自己PR",  36, 50),
     ]:
         _hdr(r, 1, label)
         _mval(r, 2, 17, data.get(key), C_LEFT_TOP)
@@ -363,9 +404,7 @@ def generate_excel(data: dict) -> bytes:
     ws.row_dimensions[r].height = 5;  r += 1
 
     # ══ 業務経歴タイトル ══════════════════════════════
-    ws.merge_cells(f"A{r}:Q{r}")
-    sec = ws.cell(row=r, column=1, value="業　務　経　歴")
-    sec.font, sec.alignment = SEC_FONT, C_CENTER
+    _title_row(r, 1, 17, "業　務　経　歴", SEC_FONT, C_CENTER)
     ws.row_dimensions[r].height = 22;  r += 1
 
     # ══ 業務経歴ヘッダー行 ═══════════════════════════
@@ -391,19 +430,16 @@ def generate_excel(data: dict) -> bytes:
         phases = proj.get("フェーズ", {}) or {}
         bg     = STRIPE if pi % 2 == 0 else None
 
-        # システム概要 + 担当業務を統合
         overview = safe_str(proj.get("プロジェクト概要"))
         tasks    = safe_str(proj.get("担当業務"))
         combined = (f"【概要】{overview}\n【担当】{tasks}"
                     if tasks not in ("-", overview, "") else overview)
 
-        # OS/DB + 環境 + 言語を統合
-        os_db = safe_str(proj.get("OS_DB"))
-        env   = safe_str(proj.get("作業環境"))
-        lang  = safe_str(proj.get("開発言語"))
+        os_db    = safe_str(proj.get("OS_DB"))
+        env      = safe_str(proj.get("作業環境"))
+        lang     = safe_str(proj.get("開発言語"))
         env_text = "\n".join(x for x in [os_db, env, lang] if x and x != "-")
 
-        # 各列に値を設定
         row_vals = [
             safe_str(proj.get("No", pi + 1)),
             safe_str(proj.get("開始年月")),
@@ -422,11 +458,12 @@ def generate_excel(data: dict) -> bytes:
             else:
                 align = C_CENTER if ci >= 8 else C_LEFT
             cell = ws.cell(row=r, column=ci, value=v)
-            cell.font, cell.alignment, cell.border = VAL_FONT, align, BORDER
+            cell.font      = VAL_FONT
+            cell.alignment = align
+            cell.border    = BORDER
             if bg:
                 cell.fill = bg
 
-        # 行高さ：テキスト量に応じて動的設定
         _row_h(r, combined, env_text, min_h=25, cpl=38)
         r += 1
 
@@ -437,6 +474,7 @@ def generate_excel(data: dict) -> bytes:
     buf = _BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
 
 
 
