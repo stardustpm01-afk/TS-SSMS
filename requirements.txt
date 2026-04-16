@@ -1,6 +1,7 @@
 streamlit
 google-generativeai
 openpyxl
+xlrd
 pdfplumber
 PyMuPDF
 reportlab

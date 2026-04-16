@@ -83,23 +83,40 @@ st.markdown("""
 # ユーティリティ関数
 # ─────────────────────────────────────────
 
-def extract_text_from_excel(file_bytes: bytes) -> str:
+def extract_text_from_excel(file_bytes: bytes, ext: str = "xlsx") -> str:
     """ExcelファイルからテキストをGrid形式で抽出"""
-    wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
     result = []
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        result.append(f"=== シート: {sheet_name} ===")
-        for row in ws.iter_rows():
-            row_texts = []
-            for cell in row:
-                val = cell.value
-                if val is not None:
-                    if isinstance(val, datetime):
-                        val = val.strftime("%Y/%m")
-                    row_texts.append(f"[{cell.coordinate}]{str(val).strip()}")
-            if row_texts:
-                result.append("  |  ".join(row_texts))
+    if ext == "xls":
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=file_bytes)
+        for sheet_name in wb.sheet_names():
+            ws = wb.sheet_by_name(sheet_name)
+            result.append(f"=== シート: {sheet_name} ===")
+            for row_idx in range(ws.nrows):
+                row_texts = []
+                for col_idx in range(ws.ncols):
+                    cell = ws.cell(row_idx, col_idx)
+                    val = cell.value
+                    if val is not None and val != "":
+                        col_letter = chr(ord('A') + col_idx) if col_idx < 26 else f"C{col_idx}"
+                        row_texts.append(f"[{col_letter}{row_idx+1}]{str(val).strip()}")
+                if row_texts:
+                    result.append("  |  ".join(row_texts))
+    else:
+        wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            result.append(f"=== シート: {sheet_name} ===")
+            for row in ws.iter_rows():
+                row_texts = []
+                for cell in row:
+                    val = cell.value
+                    if val is not None:
+                        if isinstance(val, datetime):
+                            val = val.strftime("%Y/%m")
+                        row_texts.append(f"[{cell.coordinate}]{str(val).strip()}")
+                if row_texts:
+                    result.append("  |  ".join(row_texts))
     return "\n".join(result)
 
 
@@ -566,7 +583,7 @@ with col2:
 
                         # テキスト抽出
                         if ext in ["xlsx", "xls"]:
-                            text = extract_text_from_excel(file_bytes)
+                            text = extract_text_from_excel(file_bytes, ext)
                         else:
                             text = extract_text_from_pdf(file_bytes)
 
